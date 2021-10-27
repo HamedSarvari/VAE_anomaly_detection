@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torch.distributions import Normal, kl_divergence
 from torch.nn.functional import softplus
-
+from hamed_utils import create_layer_dims
 
 def tabular_encoder(input_size: int, latent_size: int):
     """
@@ -37,6 +37,49 @@ def tabular_decoder(latent_size: int, output_size: int):
         # times 2 because this is the concatenated vector of reconstructed mean and variance
     )
 
+
+# #7 layer
+#
+# def tabular_encoder(input_size: int, latent_size: int ):
+#     """
+#     Simple encoder for tabular data.
+#     If you want to feed image to a VAE make another encoder function with Conv2d instead of Linear layers.
+#     :param input_size: number of input variables
+#     :param latent_size: number of output variables i.e. the size of the latent space since it's the encoder of a VAE
+#     :return: The untrained encoder model
+#     """
+#
+#     layers = create_layer_dims(input_size)
+#     print('layers:' , layers)
+#
+#     return nn.Sequential(
+#         nn.Linear(input_size, layers[1]),
+#         nn.ReLU(),
+#         nn.Linear(layers[1], layers[2]),
+#         nn.ReLU(),
+#         nn.Linear(layers[2], latent_size * 2)
+#         # times 2 because this is the concatenated vector of latent mean and variance
+#     )
+#
+#
+# def tabular_decoder(latent_size: int, output_size: int):
+#     """
+#     Simple decoder for tabular data.
+#     :param latent_size: size of input latent space
+#     :param output_size: number of output parameters. Must have the same value of input_size
+#     :return: the untrained decoder
+#     """
+#     input_size = output_size
+#     layers = create_layer_dims(input_size)
+#
+#     return nn.Sequential(
+#         nn.Linear(latent_size, layers[4]),
+#         nn.ReLU(),
+#         nn.Linear(layers[4], layers[5]),
+#         nn.ReLU(),
+#         nn.Linear(layers[5], output_size * 2)
+#         # times 2 because this is the concatenated vector of reconstructed mean and variance
+#     )
 
 class VAEAnomaly(nn.Module):
 
@@ -76,14 +119,23 @@ class VAEAnomaly(nn.Module):
         - z = torch.Tensor sampled latent space from latent distribution
         """
         batch_size = len(x)
-        latent_mu, latent_sigma = self.encoder(x).chunk(2, dim=1) #both with size [batch_size, latent_size]
+        latent_mu, latent_sigma = self.encoder(x).chunk(2, dim=1)  # both with size [batch_size, latent_size]
+        #print('mu',latent_mu.shape)
         latent_sigma = softplus(latent_sigma)
         dist = Normal(latent_mu, latent_sigma)
         z = dist.rsample([self.L])  # shape: [L, batch_size, latent_size]
+        #print('shape:',z.shape)
+
         z = z.view(self.L * batch_size, self.latent_size)
+
+        #print('new shape:', z.shape)
         recon_mu, recon_sigma = self.decoder(z).chunk(2, dim=1)
+
+
         recon_sigma = softplus(recon_sigma)
         recon_mu = recon_mu.view(self.L, *x.shape)
+
+
         recon_sigma = recon_sigma.view(self.L, *x.shape)
         return dict(latent_dist=dist, latent_mu=latent_mu,
                     latent_sigma=latent_sigma, recon_mu=recon_mu,
@@ -108,9 +160,9 @@ class VAEAnomaly(nn.Module):
         p = recon_dist.log_prob(x).exp().mean(dim=0).mean(dim=-1)  # vector of shape [batch_size]
         return p
 
-    def generate(self, batch_size: int=1) -> torch.Tensor:
+    def generate(self, batch_size: int = 1) -> torch.Tensor:
         """
-        Sample from prior distribution, feed into decoder and get in output recostructed samples
+        Sample from prior distribution, feed into decoder and get in output reconstructed samples
         :param batch_size:
         :return: Generated samples
         """
@@ -118,5 +170,4 @@ class VAEAnomaly(nn.Module):
         recon_mu, recon_sigma = self.decoder(z).chunk(2, dim=1)
         recon_sigma = softplus(recon_sigma)
         return recon_mu + recon_sigma * torch.rand_like(recon_sigma)
-
 

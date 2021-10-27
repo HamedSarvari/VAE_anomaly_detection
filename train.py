@@ -1,5 +1,4 @@
 import argparse
-
 import torch
 import yaml
 from ignite.engine import Engine, Events
@@ -8,10 +7,11 @@ from path import Path
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from ignite.contrib.handlers.tqdm_logger import ProgressBar
-
 from VAE import VAEAnomaly
-from dataset import load_dataset
-
+from dataset import load_dataset, get_data_label
+from Autoencoder_utils_torch import *
+import pandas as pd
+import numpy as np
 
 def get_folder_run() -> Path:
     run_path: Path = Path(__file__).parent / 'run'
@@ -33,8 +33,7 @@ class TrainStep:
 
     def __call__(self, engine, batch):
         x = batch[0]
-        if self.device: 
-            x = x.to(self.device)
+        if self.device: x.to(self.device)
         pred_output = self.model(x)
         pred_output['loss'].backward()
         self.opt.step()
@@ -100,17 +99,61 @@ def store_codebase_into_experiment(experiment_folder):
     with open(experiment_folder / 'vae.py', 'w') as f:
         f.write(code)
 
+#ds_names = ['Ecoli4','Glass', 'Lympho', 'PageBlocks','Pima','SatImage','Shuttle','SpamBase','Stamps','WDBC','Wilt','WPBC','Yeast05679v4','Yeast2v4','KDD99', 'ALOI']
+ds_names = [8]
+#ds_names = ['SpamBase']
+#ds_names = ['Stamps','WDBC','Wilt','WPBC','Yeast05679v4','Yeast2v4','KDD99', 'ALOI']
+is_mnist= True
+mode= 'semi_supervised'
+num_exps = 3
+
 
 if __name__ == '__main__':
-    args = get_args()
-    print(args)
-    experiment_folder = get_folder_run()
-    model = VAEAnomaly(args.input_size, args.latent_size, args.num_resamples).to(args.device)
-    opt = torch.optim.Adam(model.parameters(), args.lr)
-    dloader = DataLoader(load_dataset(), args.batch_size)
 
-    store_codebase_into_experiment(experiment_folder)
-    with open(experiment_folder / 'config.yaml', 'w') as f:
-        yaml.dump(args, f)
 
-    train(model, opt, dloader, args.epochs, experiment_folder, args.device, args)
+    for ds_name in ds_names:
+
+        print(ds_name,'------------------------------------------------------')
+        args = get_args()
+        print(args)
+        experiment_folder = get_folder_run()
+        # model = VAEAnomaly(args.input_size, args.latent_size, args.num_resamples).to(args.device)
+
+        if mode == 'unsupervised':
+            data, data_t, labels = get_data_label(ds_name, mnist=is_mnist)
+            dloader = DataLoader(load_dataset(ds_name, inliers=False, mnist=is_mnist), args.batch_size)
+
+        elif mode == 'semi_supervised':
+            data, data_t, labels = get_data_label(ds_name, mnist= is_mnist, inliers=True)
+            dloader = DataLoader(load_dataset(ds_name, inliers=True, mnist=is_mnist), args.batch_size)
+        else:
+            break
+
+        model = VAEAnomaly(data.shape[1], args.latent_size, args.num_resamples).to(args.device)
+        opt = torch.optim.Adam(model.parameters(), args.lr)
+
+        store_codebase_into_experiment(experiment_folder)
+        with open(experiment_folder / 'config.yaml', 'w') as f:
+            yaml.dump(args, f)
+
+        results = []
+        for i in range(num_exps):  # Number of experiment reps
+
+            train(model, opt, dloader, args.epochs, experiment_folder, args.device, args)
+
+            # evaluation phase:
+            # load all data, regardless of mode in training to evaluate
+            data, data_t, labels = get_data_label(ds_name, mnist=is_mnist)
+            rec_probs = model.reconstructed_probability(data_t)
+            AUCPR = eval_model(data_to_dic(np.array(-rec_probs)), data_to_dic(labels))  #higher prob = less outlierness
+            print('AUCPR= ', AUCPR)
+            results.append(AUCPR)
+
+        results.append('---')
+        tmp = results[:-1]
+        results.append(np.mean(tmp))
+        results.append(np.std(tmp))
+        df = pd.DataFrame(results)
+        df.to_csv(str(ds_name) + '_' + mode + '.csv', header=False, index=False)
+
+
