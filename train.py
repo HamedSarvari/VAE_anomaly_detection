@@ -12,6 +12,7 @@ from dataset import load_dataset, get_data_label
 from Autoencoder_utils_torch import *
 import pandas as pd
 import numpy as np
+import os
 
 def get_folder_run() -> Path:
     run_path: Path = Path(__file__).parent / 'run'
@@ -89,6 +90,14 @@ def get_args() -> argparse.Namespace:
     parser.add_argument('--steps-log-loss', type=int, dest='steps_log_loss', default=1_000)
     parser.add_argument('--steps-log-norm-params', type=int, 
                         dest='steps_log_norm_params', default=1_000)
+    # Added
+    parser.add_argument('--is-mnist', type=bool, dest='is_mnist', default=False)
+    parser.add_argument('--datasets', type=str, dest= 'ds_file', default= 'ds_names.csv',
+                        help = 'name of the file containing dataset names. one line separated by comma')
+    parser.add_argument('--mode', type=str, dest='mode', default = 'unsupervised',
+                        choices= ['unsupervised', 'semisupervised'])
+    parser.add_argument('--repeats', type=int, dest='num_exps', default=10)
+    parser.add_argument('--structure', type=str, dest='net_structure', default='BAE', choices=['An_paper', 'BAE'])
 
     return parser.parse_args()
 
@@ -99,37 +108,37 @@ def store_codebase_into_experiment(experiment_folder):
     with open(experiment_folder / 'vae.py', 'w') as f:
         f.write(code)
 
-#ds_names = ['Ecoli4','Glass', 'Lympho', 'PageBlocks','Pima','SatImage','Shuttle','SpamBase','Stamps','WDBC','Wilt','WPBC','Yeast05679v4','Yeast2v4','KDD99', 'ALOI']
-ds_names = [8]
-#ds_names = ['SpamBase']
-#ds_names = ['Stamps','WDBC','Wilt','WPBC','Yeast05679v4','Yeast2v4','KDD99', 'ALOI']
-is_mnist= True
-mode= 'semi_supervised'
-num_exps = 3
-
-
 if __name__ == '__main__':
+
+    args = get_args()
+    print(args)
+    mode = args.mode
+    is_mnist = args.is_mnist
+    print('Running in ' + mode + ' setting')
+    ds_names = pd.read_csv(args.ds_file)
+    print(list(ds_names))
+    num_exps = args.num_exps
 
 
     for ds_name in ds_names:
 
-        print(ds_name,'------------------------------------------------------')
-        args = get_args()
-        print(args)
+        print('Dataset name: ------------------', ds_name ,'-----------------------------------------------')
+
         experiment_folder = get_folder_run()
-        # model = VAEAnomaly(args.input_size, args.latent_size, args.num_resamples).to(args.device)
+        print(experiment_folder)
+
 
         if mode == 'unsupervised':
-            data, data_t, labels = get_data_label(ds_name, mnist=is_mnist)
-            dloader = DataLoader(load_dataset(ds_name, inliers=False, mnist=is_mnist), args.batch_size)
+            data, data_t, labels = get_data_label(ds_name, mnist=args.is_mnist)
+            dloader = DataLoader(load_dataset(ds_name, inliers=False, mnist= args.is_mnist), args.batch_size)
 
-        elif mode == 'semi_supervised':
-            data, data_t, labels = get_data_label(ds_name, mnist= is_mnist, inliers=True)
-            dloader = DataLoader(load_dataset(ds_name, inliers=True, mnist=is_mnist), args.batch_size)
+        elif mode == 'semisupervised':
+            data, data_t, labels = get_data_label(ds_name, mnist= args.is_mnist, inliers=True)
+            dloader = DataLoader(load_dataset(ds_name, inliers=True, mnist=args.is_mnist), args.batch_size)
         else:
             break
 
-        model = VAEAnomaly(data.shape[1], args.latent_size, args.num_resamples).to(args.device)
+        model = VAEAnomaly(data.shape[1], args.latent_size, args.net_structure, args.num_resamples).to(args.device)
         opt = torch.optim.Adam(model.parameters(), args.lr)
 
         store_codebase_into_experiment(experiment_folder)
@@ -145,6 +154,15 @@ if __name__ == '__main__':
             # load all data, regardless of mode in training to evaluate
             data, data_t, labels = get_data_label(ds_name, mnist=is_mnist)
             rec_probs = model.reconstructed_probability(data_t)
+
+            rec_probs_pd = pd.DataFrame(rec_probs)
+
+            folder_path = experiment_folder + '/' + ds_name + '/'
+            if not os.path.exists(folder_path):
+                os.mkdir(folder_path)
+            rec_probs_pd.to_csv(folder_path + ds_name +'_' + mode + '_rep' + str(i) + '.csv')
+
+
             AUCPR = eval_model(data_to_dic(np.array(-rec_probs)), data_to_dic(labels))  #higher prob = less outlierness
             print('AUCPR= ', AUCPR)
             results.append(AUCPR)
@@ -154,6 +172,6 @@ if __name__ == '__main__':
         results.append(np.mean(tmp))
         results.append(np.std(tmp))
         df = pd.DataFrame(results)
-        df.to_csv(str(ds_name) + '_' + mode + '.csv', header=False, index=False)
+        df.to_csv(folder_path + ds_name + '_' + mode + '_AUCPRs.csv', header=False, index=False)
 
 
